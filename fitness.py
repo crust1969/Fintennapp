@@ -1,14 +1,30 @@
+import zipfile
+import os
 import xml.etree.ElementTree as ET
 import pandas as pd
 import matplotlib.pyplot as plt
 from datetime import datetime
 
 # === Einstellungen ===
-FILE_PATH = "export.xml"  # Pfad zur entpackten Datei aus export.zip
+ZIP_FILE = "export.zip"
+XML_FILE = "export.xml"
+
+# === ZIP entpacken ===
+if not os.path.exists(XML_FILE):
+    print(f"📦 Entpacke {ZIP_FILE} ...")
+    with zipfile.ZipFile(ZIP_FILE, "r") as zip_ref:
+        for file in zip_ref.namelist():
+            if file.endswith("export.xml"):
+                zip_ref.extract(file, ".")
+                os.rename(file, XML_FILE)
+                print(f"✅ {XML_FILE} extrahiert")
+                break
+else:
+    print("✅ export.xml bereits vorhanden")
 
 # === XML einlesen ===
 print("📥 Lade Apple Health Daten...")
-tree = ET.parse(FILE_PATH)
+tree = ET.parse(XML_FILE)
 root = tree.getroot()
 
 records = []
@@ -44,9 +60,9 @@ print(daily.tail(7).round(2))
 # === Beispielhafte Kennzahlen ===
 letzter_tag = daily.tail(1)
 if not letzter_tag.empty:
-    gewicht = letzter_tag["Gewicht (kg)"].values[0] if "Gewicht (kg)" in letzter_tag else None
-    puls = letzter_tag["Herzfrequenz (bpm)"].values[0] if "Herzfrequenz (bpm)" in letzter_tag else None
-    schritte = letzter_tag["Schritte"].values[0] if "Schritte" in letzter_tag else None
+    gewicht = letzter_tag.get("Gewicht (kg)", [None])[0]
+    puls = letzter_tag.get("Herzfrequenz (bpm)", [None])[0]
+    schritte = letzter_tag.get("Schritte", [None])[0]
 
     print("\n🧠 Gesundheitsprofil:")
     if gewicht:
