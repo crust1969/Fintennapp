@@ -24,8 +24,8 @@ MAX_RECORDS = 50000  # Limit für schnelle Verarbeitung
 uploaded_file = st.file_uploader("Lade dein export.zip hoch", type="zip")
 
 if uploaded_file is not None:
-    try:
-    with zipfile.ZipFile(uploaded_file, "r") as z:
+     try:
+     with zipfile.ZipFile(uploaded_file, "r") as z:
 # Suche nach export.xml
     export_files = [f for f in z.namelist() if f.endswith("export.xml")]
 if not export_files:
