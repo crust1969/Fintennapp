@@ -8,7 +8,7 @@ st.set_page_config(page_title="Apple Health Dashboard", layout="wide")
 st.title("Apple Health Digital Twin (leichtgewichtige Version)")
 
 uploaded_file = st.file_uploader("Lade dein export.zip hoch", type="zip")
-MAX_RECORDS = 50000  # Limit deutlich reduziert für schnelle Verarbeitung
+MAX_RECORDS = 50000  # Limit reduziert für schnelle Verarbeitung
 
 if uploaded_file is not None:
 with zipfile.ZipFile(uploaded_file, "r") as z:
@@ -16,39 +16,43 @@ export_files = [f for f in z.namelist() if f.endswith("export.xml")]
 if export_files:
 xml_path = export_files[0]
 st.info(f"{xml_path} gefunden. Verarbeitung läuft ...")
-with z.open(xml_path) as f:
-records = []
-count = 0
-progress_bar = st.progress(0.0)
-thirty_days_ago = datetime.now() - timedelta(days=30)
-for event, elem in ET.iterparse(f, events=("end",)):
-if elem.tag == "Record":
-r = elem.attrib
-if r.get("type") in [
-"HKQuantityTypeIdentifierBodyMass",
-"HKQuantityTypeIdentifierHeight",
-"HKQuantityTypeIdentifierStepCount",
-"HKQuantityTypeIdentifierHeartRate",
-]:
-# Nur relevante Datumswerte der letzten 30 Tage behalten
-try:
-record_date = datetime.fromisoformat(r.get("startDate"))
-except:
-continue
-if record_date >= thirty_days_ago or r.get("type") in ["HKQuantityTypeIdentifierBodyMass","HKQuantityTypeIdentifierHeight"]:
-records.append({
-"Datum": r.get("startDate"),
-"Typ": r.get("type"),
-"Wert": r.get("value")
-})
-elem.clear()
-count += 1
-if count % 5000 == 0:
-progress_bar.progress(min(count / MAX_RECORDS, 1.0))
-if count >= MAX_RECORDS:
-break
 
 ```
+        with z.open(xml_path) as f:
+            records = []
+            count = 0
+            progress_bar = st.progress(0.0)
+            thirty_days_ago = datetime.now() - timedelta(days=30)
+
+            for event, elem in ET.iterparse(f, events=("end",)):
+                if elem.tag == "Record":
+                    r = elem.attrib
+                    if r.get("type") in [
+                        "HKQuantityTypeIdentifierBodyMass",
+                        "HKQuantityTypeIdentifierHeight",
+                        "HKQuantityTypeIdentifierStepCount",
+                        "HKQuantityTypeIdentifierHeartRate",
+                    ]:
+                        try:
+                            record_date = datetime.fromisoformat(r.get("startDate"))
+                        except:
+                            continue
+                        if record_date >= thirty_days_ago or r.get("type") in [
+                            "HKQuantityTypeIdentifierBodyMass",
+                            "HKQuantityTypeIdentifierHeight"
+                        ]:
+                            records.append({
+                                "Datum": r.get("startDate"),
+                                "Typ": r.get("type"),
+                                "Wert": r.get("value")
+                            })
+                    elem.clear()
+                    count += 1
+                    if count % 5000 == 0:
+                        progress_bar.progress(min(count / MAX_RECORDS, 1.0))
+                    if count >= MAX_RECORDS:
+                        break
+
             @st.cache_data
             def process_records(records):
                 df = pd.DataFrame(records)
@@ -59,7 +63,7 @@ break
             df = process_records(records)
             st.success(f"{len(df)} Datensätze verarbeitet.")
 
-            # BMI & Alter
+            # BMI & Alter berechnen
             height_df = df[df["Typ"] == "HKQuantityTypeIdentifierHeight"].copy()
             weight_df = df[df["Typ"] == "HKQuantityTypeIdentifierBodyMass"].copy()
             if not height_df.empty and not weight_df.empty:
