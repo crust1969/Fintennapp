@@ -1,109 +1,113 @@
 import streamlit as st
-import zipfile
-import xml.etree.ElementTree as ET
 import pandas as pd
-import matplotlib.pyplot as plt
-from datetime import date
-import tempfile
+import xml.etree.ElementTree as ET
+import zipfile
 import os
+import io
+from datetime import datetime
+import matplotlib.pyplot as plt
 
-st.set_page_config(page_title="Apple Health Digital Twin", layout="wide")
-st.title("🏃‍♂️ Apple Health Digital Twin")
-st.write("Upload your Apple Health `Export.zip` to analyze Weight, Heart Rate, Steps, and BMI.")
+# Streamlit App
+st.set_page_config(page_title="Digital Health Twin", page_icon="💪", layout="wide")
+st.title("💪 Your Digital Health Twin")
 
-# --- Upload ZIP file ---
-uploaded_file = st.file_uploader("📦 Upload Export.zip", type="zip")
+st.write("Upload your **Apple Health Export.zip** to visualize key metrics like weight, heart rate, and steps — plus calculate your BMI and trends.")
+
+# --- File Upload ---
+uploaded_file = st.file_uploader("📦 Upload Export.zip from your iPhone", type="zip")
 
 if uploaded_file:
-    with tempfile.TemporaryDirectory() as tmpdir:
-        zip_path = os.path.join(tmpdir, "export.zip")
-        with open(zip_path, "wb") as f:
-            f.write(uploaded_file.getbuffer())
+    with st.spinner("📂 Extracting your Apple Health data..."):
+        extract_dir = "apple_health_export"
+        if os.path.exists(extract_dir):
+            import shutil
+            shutil.rmtree(extract_dir)
 
-        # Extract ZIP
-        with zipfile.ZipFile(zip_path, "r") as zip_ref:
-            zip_ref.extractall(tmpdir)
+        os.makedirs(extract_dir, exist_ok=True)
+        with zipfile.ZipFile(uploaded_file, "r") as zip_ref:
+            zip_ref.extractall(extract_dir)
 
         # Find export.xml
         xml_path = None
-        for root_dir, _, files in os.walk(tmpdir):
-            for f in files:
-                if f == "export.xml":
-                    xml_path = os.path.join(root_dir, f)
-                    break
+        for root_dir, _, files in os.walk(extract_dir):
+            if "export.xml" in files:
+                xml_path = os.path.join(root_dir, "export.xml")
+                break
+
         if not xml_path:
-            st.error("❌ No export.xml found inside the ZIP file.")
+            st.error("❌ export.xml not found in ZIP file.")
             st.stop()
 
-        st.success("✅ Export.zip extracted successfully")
+    # --- Parse XML incrementally ---
+    st.write("⏳ Parsing XML data (this may take a few seconds)...")
+    progress_bar = st.progress(0)
+    records = []
+    count = 0
 
-        # --- Parse XML ---
-        records = []
-        tree = ET.parse(xml_path)
-        root = tree.getroot()
-        for record in root.findall("Record"):
-            r = record.attrib
-            if r["type"] in [
+    # Stream parse
+    for event, elem in ET.iterparse(xml_path, events=("end",)):
+        if elem.tag == "Record":
+            r = elem.attrib
+            if r.get("type") in [
                 "HKQuantityTypeIdentifierBodyMass",
                 "HKQuantityTypeIdentifierHeartRate",
-                "HKQuantityTypeIdentifierStepCount"
+                "HKQuantityTypeIdentifierStepCount",
+                "HKQuantityTypeIdentifierHeight"
             ]:
                 records.append({
-                    "Datum": r["startDate"],
-                    "Typ": r["type"],
-                    "Wert": r["value"]
+                    "Datum": r.get("startDate"),
+                    "Typ": r.get("type"),
+                    "Wert": r.get("value")
                 })
+            elem.clear()
+            count += 1
+            if count % 10000 == 0:
+                progress_bar.progress(min(count / 200000, 1.0))
 
-        df = pd.DataFrame(records)
-        df["Datum"] = pd.to_datetime(df["Datum"]).dt.date
-        df["Wert"] = pd.to_numeric(df["Wert"], errors="coerce")
+    progress_bar.progress(1.0)
+    st.success(f"✅ Parsed {len(records):,} records successfully!")
 
-        # --- Pivot table ---
-        daily = df.groupby(["Datum", "Typ"])["Wert"].mean().unstack()
+    # --- Convert to DataFrame ---
+    df = pd.DataFrame(records)
+    df["Datum"] = pd.to_datetime(df["Datum"], errors="coerce")
+    df["Wert"] = pd.to_numeric(df["Wert"], errors="coerce")
+    df = df.dropna(subset=["Datum", "Wert"])
 
-        # Rename columns
-        rename_map = {
-            "HKQuantityTypeIdentifierBodyMass": "Gewicht (kg)",
-            "HKQuantityTypeIdentifierHeartRate": "Herzfrequenz (bpm)",
-            "HKQuantityTypeIdentifierStepCount": "Schritte"
-        }
-        daily.rename(columns=rename_map, inplace=True)
+    # --- User input for age ---
+    st.subheader("👤 Personal Information")
+    col1, col2 = st.columns(2)
+    with col1:
+        birth_year = st.number_input("Birth Year", min_value=1940, max_value=datetime.now().year, value=1969)
+    with col2:
+        height_cm = st.number_input("Height (cm)", min_value=140, max_value=210, value=180)
 
-        # --- User info ---
-        st.sidebar.header("👤 Personal Data")
-        birth_year = st.sidebar.number_input("Birth year", min_value=1900, max_value=2025, value=1969)
-        birth_month = st.sidebar.number_input("Birth month", 1, 12, 7)
-        birth_day = st.sidebar.number_input("Birth day", 1, 31, 15)
-        height = st.sidebar.number_input("Height (m)", min_value=1.0, max_value=2.5, value=1.83)
+    age = datetime.now().year - birth_year
+    st.write(f"🧠 Calculated Age: **{age} years**")
 
-        age_years = (date.today() - date(birth_year, birth_month, birth_day)).days / 365.25
-        st.sidebar.write(f"🎂 Age: **{age_years:.1f} years**")
+    # --- BMI Calculation (use last weight record) ---
+    weight_records = df[df["Typ"] == "HKQuantityTypeIdentifierBodyMass"]
+    if not weight_records.empty:
+        latest_weight = weight_records.sort_values("Datum").iloc[-1]["Wert"]
+        bmi = latest_weight / ((height_cm / 100) ** 2)
+        st.metric(label="💡 Latest BMI", value=f"{bmi:.1f}")
+    else:
+        st.warning("⚠️ No weight data found in your export.")
 
-        # --- BMI Calculation ---
-        if "Gewicht (kg)" in daily.columns:
-            daily["BMI"] = daily["Gewicht (kg)"] / (height ** 2)
+    # --- Visualization ---
+    st.subheader("📊 Health Data Overview")
 
-        st.subheader("📊 Summary (last 7 days)")
-        st.dataframe(daily.tail(7).round(2))
+    # Daily averages
+    df_daily = df.groupby(["Datum", "Typ"])["Wert"].mean().unstack()
+    st.line_chart(df_daily)
 
-        # --- Plot ---
-        st.subheader(f"📈 Health Trends — Age {age_years:.1f} years")
-        fig, ax = plt.subplots(figsize=(12, 6))
+    # --- Data download option ---
+    csv = df.to_csv(index=False).encode("utf-8")
+    st.download_button(
+        label="💾 Download Processed Data (CSV)",
+        data=csv,
+        file_name="apple_health_data.csv",
+        mime="text/csv",
+    )
 
-        if "Gewicht (kg)" in daily.columns:
-            ax.plot(daily.index, daily["Gewicht (kg)"], label="Gewicht (kg)", linewidth=2)
-        if "Herzfrequenz (bpm)" in daily.columns:
-            ax.plot(daily.index, daily["Herzfrequenz (bpm)"], label="Puls (bpm)", alpha=0.7)
-        if "Schritte" in daily.columns:
-            ax.plot(daily.index, daily["Schritte"]/1000, label="Schritte (x1000)", alpha=0.6)
-        if "BMI" in daily.columns:
-            ax.plot(daily.index, daily["BMI"], label="BMI", linestyle="--", color="purple")
-
-        ax.set_xlabel("Datum")
-        ax.set_ylabel("Wert")
-        ax.legend()
-        ax.grid(True)
-        st.pyplot(fig)
 else:
-    st.info("Please upload your `Export.zip` file to start.")
-
+    st.info("⬆️ Please upload your Apple Health **Export.zip** file to begin.")
