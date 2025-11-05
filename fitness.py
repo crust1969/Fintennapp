@@ -13,34 +13,39 @@ MAX_RECORDS = 200000  # Limit für große Dateien
 
 if uploaded_file is not None:
 with zipfile.ZipFile(uploaded_file, "r") as z:
-if "export.xml" in z.namelist():
-st.info("export.xml gefunden. Verarbeitung läuft ...")
-with z.open("export.xml") as f:
-records = []
-count = 0
-progress_bar = st.progress(0.0)
-for event, elem in ET.iterparse(f, events=("end",)):
-if elem.tag == "Record":
-r = elem.attrib
-if r.get("type") in [
-"HKQuantityTypeIdentifierBodyMass",
-"HKQuantityTypeIdentifierHeight",
-"HKQuantityTypeIdentifierStepCount",
-"HKQuantityTypeIdentifierHeartRate",
-]:
-records.append({
-"Datum": r.get("startDate"),
-"Typ": r.get("type"),
-"Wert": r.get("value")
-})
-elem.clear()
-count += 1
-if count % 10000 == 0:
-progress_bar.progress(min(count / MAX_RECORDS, 1.0))
-if count >= MAX_RECORDS:
-break
+# Suche export.xml im ZIP
+export_files = [f for f in z.namelist() if f.endswith("export.xml")]
+if export_files:
+xml_path = export_files[0]
+st.info(f"{xml_path} gefunden. Verarbeitung läuft ...")
 
 ```
+        with z.open(xml_path) as f:
+            records = []
+            count = 0
+            progress_bar = st.progress(0.0)
+            
+            for event, elem in ET.iterparse(f, events=("end",)):
+                if elem.tag == "Record":
+                    r = elem.attrib
+                    if r.get("type") in [
+                        "HKQuantityTypeIdentifierBodyMass",
+                        "HKQuantityTypeIdentifierHeight",
+                        "HKQuantityTypeIdentifierStepCount",
+                        "HKQuantityTypeIdentifierHeartRate",
+                    ]:
+                        records.append({
+                            "Datum": r.get("startDate"),
+                            "Typ": r.get("type"),
+                            "Wert": r.get("value")
+                        })
+                    elem.clear()
+                    count += 1
+                    if count % 10000 == 0:
+                        progress_bar.progress(min(count / MAX_RECORDS, 1.0))
+                    if count >= MAX_RECORDS:
+                        break
+
             @st.cache_data
             def process_records(records):
                 df = pd.DataFrame(records)
@@ -60,6 +65,7 @@ break
                 latest_height = height_df.sort_values("Datum").iloc[-1]["Wert"] / 100  # m
                 latest_weight = weight_df.sort_values("Datum").iloc[-1]["Wert"]  # kg
                 bmi = latest_weight / (latest_height ** 2)
+                # Alter aus frühestem Datum der Daten geschätzt
                 age = datetime.now().year - df["Datum"].dt.year.min()
                 st.metric("BMI", f"{bmi:.1f}")
                 st.metric("Geschätztes Alter", f"{age} Jahre")
@@ -72,5 +78,5 @@ break
                 st.subheader("Letzte 30 Tage: Aktivität und Herzfrequenz")
                 st.line_chart(df_daily)
     else:
-        st.error("export.xml nicht in ZIP gefunden.")
+        st.error("Keine export.xml in ZIP gefunden.")
 ```
