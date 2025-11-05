@@ -12,8 +12,8 @@ uploaded_file = st.file_uploader("Lade dein export.zip hoch", type="zip")
 MAX_RECORDS = 200000  # Limit für große Dateien
 
 if uploaded_file is not None:
+# Alles unter diesem Block muss eingerückt sein
 with zipfile.ZipFile(uploaded_file, "r") as z:
-# Suche export.xml im ZIP
 export_files = [f for f in z.namelist() if f.endswith("export.xml")]
 if export_files:
 xml_path = export_files[0]
@@ -54,21 +54,18 @@ break
             df = process_records(records)
             st.success(f"{len(df)} Datensätze verarbeitet.")
 
-            # Berechne BMI falls Height und Weight vorhanden
             height_df = df[df["Typ"] == "HKQuantityTypeIdentifierHeight"].copy()
             weight_df = df[df["Typ"] == "HKQuantityTypeIdentifierBodyMass"].copy()
 
             if not height_df.empty and not weight_df.empty:
-                latest_height = height_df.sort_values("Datum").iloc[-1]["Wert"] / 100  # m
-                latest_weight = weight_df.sort_values("Datum").iloc[-1]["Wert"]  # kg
+                latest_height = height_df.sort_values("Datum").iloc[-1]["Wert"] / 100
+                latest_weight = weight_df.sort_values("Datum").iloc[-1]["Wert"]
                 bmi = latest_weight / (latest_height ** 2)
                 age = datetime.now().year - df["Datum"].dt.year.min()
                 st.metric("BMI", f"{bmi:.1f}")
                 st.metric("Geschätztes Alter", f"{age} Jahre")
 
-            # Schritte und Herzfrequenz Diagramme (letzte 30 Tage)
             df_recent = df[df["Datum"] >= (datetime.now() - pd.Timedelta(days=30))]
-
             if not df_recent.empty:
                 df_daily = df_recent.groupby(["Datum", "Typ"])["Wert"].mean().unstack()
                 st.subheader("Letzte 30 Tage: Aktivität und Herzfrequenz")
