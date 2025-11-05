@@ -5,11 +5,19 @@ import pandas as pd
 import matplotlib.pyplot as plt
 from datetime import datetime
 
-# === Einstellungen ===
+# === Dateien & Verzeichnisse ===
 ZIP_FILE = "export.zip"
 XML_FILE = "export.xml"
 
-# === ZIP entpacken ===
+print("📂 Aktuelles Verzeichnis:", os.getcwd())
+print("📁 Dateien im Verzeichnis:", os.listdir("."))
+
+# === ZIP-Datei prüfen und entpacken ===
+if not os.path.exists(ZIP_FILE):
+    print(f"❌ Fehler: {ZIP_FILE} nicht gefunden!")
+    print("👉 Lege die Datei export.zip in denselben Ordner wie fitness.py.")
+    exit()
+
 if not os.path.exists(XML_FILE):
     print(f"📦 Entpacke {ZIP_FILE} ...")
     with zipfile.ZipFile(ZIP_FILE, "r") as zip_ref:
