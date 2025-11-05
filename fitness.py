@@ -28,15 +28,29 @@ if uploaded_file:
             zip_ref.extractall(extract_dir)
 
         # Find export.xml
-        xml_path = None
-        for root_dir, _, files in os.walk(extract_dir):
-            if "export.xml" in files:
-                xml_path = os.path.join(root_dir, "export.xml")
-                break
+       # Find export.xml anywhere inside the ZIP (even in nested folders)
+xml_path = None
+for root_dir, _, files in os.walk(extract_dir):
+    for file in files:
+        if file.lower() == "export.xml":
+            xml_path = os.path.join(root_dir, file)
+            break
+    if xml_path:
+        break
 
-        if not xml_path:
-            st.error("❌ export.xml not found in ZIP file.")
-            st.stop()
+if not xml_path:
+    st.error("❌ export.xml not found in your ZIP file. Please check the structure:")
+    st.code(
+        "How to fix:\n"
+        "1️⃣ On your iPhone, open the Health app\n"
+        "2️⃣ Tap your profile picture → Export All Health Data\n"
+        "3️⃣ Airdrop or email the ZIP (don’t unzip it!)\n"
+        "4️⃣ Upload the original ZIP file here"
+    )
+    st.stop()
+else:
+    st.success(f"✅ Found export.xml at: {xml_path}")
+
 
     # --- Parse XML incrementally ---
     st.write("⏳ Parsing XML data (this may take a few seconds)...")
