@@ -2,17 +2,15 @@ import streamlit as st
 import zipfile
 import xml.etree.ElementTree as ET
 import pandas as pd
-from datetime import datetime
+from datetime import datetime, timedelta
 
 st.set_page_config(page_title="Apple Health Dashboard", layout="wide")
-st.title("Apple Health Digital Twin")
+st.title("Apple Health Digital Twin (leichtgewichtige Version)")
 
 uploaded_file = st.file_uploader("Lade dein export.zip hoch", type="zip")
-
-MAX_RECORDS = 200000  # Limit für große Dateien
+MAX_RECORDS = 50000  # Limit deutlich reduziert für schnelle Verarbeitung
 
 if uploaded_file is not None:
-# Alles unter diesem Block muss eingerückt sein
 with zipfile.ZipFile(uploaded_file, "r") as z:
 export_files = [f for f in z.namelist() if f.endswith("export.xml")]
 if export_files:
@@ -22,6 +20,7 @@ with z.open(xml_path) as f:
 records = []
 count = 0
 progress_bar = st.progress(0.0)
+thirty_days_ago = datetime.now() - timedelta(days=30)
 for event, elem in ET.iterparse(f, events=("end",)):
 if elem.tag == "Record":
 r = elem.attrib
@@ -31,6 +30,12 @@ if r.get("type") in [
 "HKQuantityTypeIdentifierStepCount",
 "HKQuantityTypeIdentifierHeartRate",
 ]:
+# Nur relevante Datumswerte der letzten 30 Tage behalten
+try:
+record_date = datetime.fromisoformat(r.get("startDate"))
+except:
+continue
+if record_date >= thirty_days_ago or r.get("type") in ["HKQuantityTypeIdentifierBodyMass","HKQuantityTypeIdentifierHeight"]:
 records.append({
 "Datum": r.get("startDate"),
 "Typ": r.get("type"),
@@ -38,7 +43,7 @@ records.append({
 })
 elem.clear()
 count += 1
-if count % 10000 == 0:
+if count % 5000 == 0:
 progress_bar.progress(min(count / MAX_RECORDS, 1.0))
 if count >= MAX_RECORDS:
 break
@@ -54,9 +59,9 @@ break
             df = process_records(records)
             st.success(f"{len(df)} Datensätze verarbeitet.")
 
+            # BMI & Alter
             height_df = df[df["Typ"] == "HKQuantityTypeIdentifierHeight"].copy()
             weight_df = df[df["Typ"] == "HKQuantityTypeIdentifierBodyMass"].copy()
-
             if not height_df.empty and not weight_df.empty:
                 latest_height = height_df.sort_values("Datum").iloc[-1]["Wert"] / 100
                 latest_weight = weight_df.sort_values("Datum").iloc[-1]["Wert"]
@@ -65,7 +70,8 @@ break
                 st.metric("BMI", f"{bmi:.1f}")
                 st.metric("Geschätztes Alter", f"{age} Jahre")
 
-            df_recent = df[df["Datum"] >= (datetime.now() - pd.Timedelta(days=30))]
+            # Letzte 30 Tage Schritte & Herzfrequenz
+            df_recent = df[df["Datum"] >= thirty_days_ago]
             if not df_recent.empty:
                 df_daily = df_recent.groupby(["Datum", "Typ"])["Wert"].mean().unstack()
                 st.subheader("Letzte 30 Tage: Aktivität und Herzfrequenz")
