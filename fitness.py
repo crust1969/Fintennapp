@@ -1,119 +1,116 @@
-#!/usr/bin/env python3
 import streamlit as st
 import zipfile
 import xml.etree.ElementTree as ET
 import pandas as pd
-from datetime import datetime, timedelta, timezone
+import io
+from datetime import datetime
 
-# --- Streamlit App Setup ---
 st.set_page_config(page_title="Apple Health Dashboard", layout="wide")
-st.title("📊 Apple Health Digital Twin – Vollständige Analyse")
 
-MAX_RECORDS = 100000  # Verarbeitungslimit (mehr = länger)
-uploaded_file = st.file_uploader("Lade dein export.zip hoch", type="zip")
+st.title("📱 Apple Health Dashboard")
+st.write("Lade hier deine **Apple Health Export.zip** Datei hoch, um deine Gesundheitsdaten zu analysieren.")
+
+uploaded_file = st.file_uploader("Wähle die Export.zip Datei", type=["zip"])
+
+# Sidebar mit KPI-Infos
+st.sidebar.header("ℹ️ KPI-Erklärungen")
+
+kpi_info = {
+    "Gewicht": "Körpergewicht in Kilogramm – Grundlage für BMI-Berechnung.",
+    "Größe": "Körpergröße in Zentimetern – meist einmalig gemessen.",
+    "BMI": "Body-Mass-Index: Gewicht in Relation zur Körpergröße (Gesund 18.5–24.9).",
+    "Schritte": "Anzahl der Schritte pro Tag – ab 7.000 gilt als gesundheitsfördernd.",
+    "Herzfrequenz": "Herzschläge pro Minute – Ruhepuls meist zwischen 60 und 75 BPM.",
+    "Distanz": "Zurückgelegte Strecke beim Gehen oder Laufen in Kilometern."
+}
+
+selected_kpi = st.sidebar.radio("KPI auswählen", list(kpi_info.keys()))
+st.sidebar.info(kpi_info[selected_kpi])
 
 if uploaded_file is not None:
     try:
         with zipfile.ZipFile(uploaded_file, "r") as z:
-            export_files = [f for f in z.namelist() if f.lower().endswith("export.xml")]
-
-            if not export_files:
-                st.error("Keine export.xml in der ZIP-Datei gefunden.")
+            # Suche nach der XML-Datei im ZIP
+            xml_name = [f for f in z.namelist() if f.endswith("export.xml")]
+            if not xml_name:
+                st.error("❌ Keine export.xml in der ZIP gefunden.")
             else:
-                xml_path = export_files[0]
-                st.info(f"{xml_path} gefunden. Verarbeitung läuft ...")
+                with z.open(xml_name[0]) as xml_file:
+                    st.success("📦 Export-Datei erfolgreich geladen!")
+                    # XML in DataFrame umwandeln
+                    tree = ET.parse(xml_file)
+                    root = tree.getroot()
 
-                # --- Auswahl der Datentypen ---
-                st.sidebar.header("⚙️ Analyseoptionen")
-                types_to_load = st.sidebar.multiselect(
-                    "Wähle Datentypen zur Anzeige:",
-                    [
-                        "HKQuantityTypeIdentifierBodyMass",
-                        "HKQuantityTypeIdentifierHeight",
-                        "HKQuantityTypeIdentifierStepCount",
-                        "HKQuantityTypeIdentifierHeartRate",
-                        "HKQuantityTypeIdentifierDistanceWalkingRunning",
-                    ],
-                    default=[
-                        "HKQuantityTypeIdentifierBodyMass",
-                        "HKQuantityTypeIdentifierStepCount",
-                        "HKQuantityTypeIdentifierHeartRate",
-                    ]
-                )
-
-                days_back = st.sidebar.slider("Zeitraum (Tage zurück)", 7, 365, 90)
-                time_limit = datetime.now(timezone.utc) - timedelta(days=days_back)
-
-                with z.open(xml_path) as f:
                     records = []
-                    count = 0
-                    progress_bar = st.progress(0.0)
+                    for record in root.findall("Record"):
+                        rtype = record.attrib.get("type")
+                        value = record.attrib.get("value")
+                        date = record.attrib.get("startDate")
 
-                    for event, elem in ET.iterparse(f, events=("end",)):
-                        if elem.tag == "Record":
-                            r = elem.attrib
-                            typ = r.get("type")
+                        if rtype and value and date:
+                            records.append((rtype, float(value), date))
 
-                            if typ in types_to_load:
-                                try:
-                                    record_date = datetime.fromisoformat(
-                                        r.get("startDate").replace("Z", "+00:00")
-                                    )
-                                except Exception:
-                                    elem.clear()
-                                    count += 1
-                                    continue
+                    df = pd.DataFrame(records, columns=["type", "value", "date"])
+                    df["date"] = pd.to_datetime(df["date"], errors="coerce")
 
-                                if record_date >= time_limit or typ in [
-                                    "HKQuantityTypeIdentifierBodyMass",
-                                    "HKQuantityTypeIdentifierHeight",
-                                ]:
-                                    records.append({
-                                        "Datum": record_date,
-                                        "Typ": typ,
-                                        "Wert": r.get("value")
-                                    })
+                    # Mapping von Apple Health Datentypen
+                    mapping = {
+                        "HKQuantityTypeIdentifierBodyMass": "Gewicht",
+                        "HKQuantityTypeIdentifierHeight": "Größe",
+                        "HKQuantityTypeIdentifierStepCount": "Schritte",
+                        "HKQuantityTypeIdentifierHeartRate": "Herzfrequenz",
+                        "HKQuantityTypeIdentifierDistanceWalkingRunning": "Distanz"
+                    }
+                    df["label"] = df["type"].map(mapping)
 
-                            elem.clear()
-                            count += 1
-                            if count % 5000 == 0:
-                                progress_bar.progress(min(count / MAX_RECORDS, 1.0))
-                            if count >= MAX_RECORDS:
-                                break
+                    # Nur bekannte Typen behalten
+                    df = df[df["label"].notna()]
 
-                    progress_bar.progress(1.0)
+                    # Letzte Werte bestimmen
+                    latest_values = df.sort_values("date").groupby("label")["value"].last()
 
-                    # --- DataFrame-Erstellung ---
-                    if not records:
-                        st.warning("Keine passenden Daten gefunden. Ändere Filter oder Zeitraum.")
+                    # BMI berechnen, falls Gewicht & Größe vorhanden
+                    if "Gewicht" in latest_values and "Größe" in latest_values:
+                        gewicht = latest_values["Gewicht"]
+                        groesse_m = latest_values["Größe"] / 100
+                        bmi = gewicht / (groesse_m ** 2)
+                        latest_values["BMI"] = round(bmi, 2)
+
+                    st.subheader("📊 Aktuelle Werte")
+                    st.dataframe(latest_values)
+
+                    # Verlauf pro KPI
+                    kpi_mapping = {
+                        "Gewicht": "HKQuantityTypeIdentifierBodyMass",
+                        "Größe": "HKQuantityTypeIdentifierHeight",
+                        "BMI": None,
+                        "Schritte": "HKQuantityTypeIdentifierStepCount",
+                        "Herzfrequenz": "HKQuantityTypeIdentifierHeartRate",
+                        "Distanz": "HKQuantityTypeIdentifierDistanceWalkingRunning"
+                    }
+
+                    if selected_kpi == "BMI":
+                        if "Gewicht" in df["label"].values and "Größe" in df["label"].values:
+                            df_g = df[df["label"] == "Größe"].sort_values("date")
+                            df_w = df[df["label"] == "Gewicht"].sort_values("date")
+                            if not df_g.empty and not df_w.empty:
+                                merged = pd.merge_asof(df_w, df_g, on="date", suffixes=("_w", "_g"))
+                                merged["BMI"] = merged["value_w"] / ((merged["value_g"] / 100) ** 2)
+                                merged = merged.dropna(subset=["BMI"])
+                                st.line_chart(merged[["date", "BMI"]].set_index("date"))
+                            else:
+                                st.warning("Nicht genug Daten für BMI-Berechnung.")
+                        else:
+                            st.warning("Gewicht und Größe fehlen für BMI.")
                     else:
-                        df = pd.DataFrame(records)
-                        df["Wert"] = pd.to_numeric(df["Wert"], errors="coerce")
-                        df = df.dropna(subset=["Wert"])
-                        st.success(f"{len(df)} Datensätze verarbeitet.")
+                        kpi_type = kpi_mapping[selected_kpi]
+                        df_sel = df[df["type"] == kpi_type]
+                        if not df_sel.empty:
+                            st.line_chart(df_sel.set_index("date")["value"])
+                        else:
+                            st.warning("Keine Daten für diese KPI gefunden.")
 
-                        # --- Rohdatenanzeige ---
-                        with st.expander("📋 Rohdaten anzeigen"):
-                            st.dataframe(df)
-
-                        # --- BMI-Berechnung ---
-                        height_df = df[df["Typ"] == "HKQuantityTypeIdentifierHeight"]
-                        weight_df = df[df["Typ"] == "HKQuantityTypeIdentifierBodyMass"]
-                        if not height_df.empty and not weight_df.empty:
-                            latest_height = height_df.sort_values("Datum").iloc[-1]["Wert"] / 100
-                            latest_weight = weight_df.sort_values("Datum").iloc[-1]["Wert"]
-                            bmi = latest_weight / (latest_height ** 2)
-                            st.metric("BMI", f"{bmi:.1f}")
-
-                        # --- Durchschnittswerte ---
-                        avg_vals = df.groupby("Typ")["Wert"].mean().round(2)
-                        st.subheader("Durchschnittswerte im Zeitraum")
-                        st.dataframe(avg_vals)
-
-                        # --- Zeitverlauf ---
-                        st.subheader("📈 Verlauf über Zeit")
-                        df_chart = df.groupby(["Datum", "Typ"])["Wert"].mean().unstack()
-                        st.line_chart(df_chart)
-
-    except zipfile.BadZipFile:
-        st.error("Die hochgeladene Datei ist kein gültiges ZIP-Archiv.")
+    except Exception as e:
+        st.error(f"Fehler beim Verarbeiten: {e}")
+else:
+    st.info("⬆️ Bitte lade zuerst deine Export.zip Datei hoch.")
