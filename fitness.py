@@ -7,10 +7,9 @@ from datetime import datetime, timedelta, timezone
 
 # --- Streamlit App Setup ---
 st.set_page_config(page_title="Apple Health Dashboard", layout="wide")
-st.title("Apple Health Digital Twin")
+st.title("📊 Apple Health Digital Twin – Vollständige Analyse")
 
-MAX_RECORDS = 50000  # Limit für schnellere Verarbeitung
-
+MAX_RECORDS = 100000  # Verarbeitungslimit (mehr = länger)
 uploaded_file = st.file_uploader("Lade dein export.zip hoch", type="zip")
 
 if uploaded_file is not None:
@@ -24,26 +23,39 @@ if uploaded_file is not None:
                 xml_path = export_files[0]
                 st.info(f"{xml_path} gefunden. Verarbeitung läuft ...")
 
+                # --- Auswahl der Datentypen ---
+                st.sidebar.header("⚙️ Analyseoptionen")
+                types_to_load = st.sidebar.multiselect(
+                    "Wähle Datentypen zur Anzeige:",
+                    [
+                        "HKQuantityTypeIdentifierBodyMass",
+                        "HKQuantityTypeIdentifierHeight",
+                        "HKQuantityTypeIdentifierStepCount",
+                        "HKQuantityTypeIdentifierHeartRate",
+                        "HKQuantityTypeIdentifierDistanceWalkingRunning",
+                    ],
+                    default=[
+                        "HKQuantityTypeIdentifierBodyMass",
+                        "HKQuantityTypeIdentifierStepCount",
+                        "HKQuantityTypeIdentifierHeartRate",
+                    ]
+                )
+
+                days_back = st.sidebar.slider("Zeitraum (Tage zurück)", 7, 365, 90)
+                time_limit = datetime.now(timezone.utc) - timedelta(days=days_back)
+
                 with z.open(xml_path) as f:
                     records = []
                     count = 0
                     progress_bar = st.progress(0.0)
 
-                    # Referenz-Zeitpunkt mit Zeitzone
-                    thirty_days_ago = datetime.now(timezone.utc) - timedelta(days=30)
-
                     for event, elem in ET.iterparse(f, events=("end",)):
                         if elem.tag == "Record":
                             r = elem.attrib
                             typ = r.get("type")
-                            if typ in [
-                                "HKQuantityTypeIdentifierBodyMass",
-                                "HKQuantityTypeIdentifierHeight",
-                                "HKQuantityTypeIdentifierStepCount",
-                                "HKQuantityTypeIdentifierHeartRate",
-                            ]:
+
+                            if typ in types_to_load:
                                 try:
-                                    # Startdatum inklusive Zeitzone parsen
                                     record_date = datetime.fromisoformat(
                                         r.get("startDate").replace("Z", "+00:00")
                                     )
@@ -52,17 +64,14 @@ if uploaded_file is not None:
                                     count += 1
                                     continue
 
-                                # Filterung nach Zeitraum (mit Zeitzonenvergleich)
-                                if (record_date >= thirty_days_ago) or (
-                                    typ in [
-                                        "HKQuantityTypeIdentifierBodyMass",
-                                        "HKQuantityTypeIdentifierHeight",
-                                    ]
-                                ):
+                                if record_date >= time_limit or typ in [
+                                    "HKQuantityTypeIdentifierBodyMass",
+                                    "HKQuantityTypeIdentifierHeight",
+                                ]:
                                     records.append({
-                                        "Datum": r.get("startDate"),
+                                        "Datum": record_date,
                                         "Typ": typ,
-                                        "Wert": r.get("value"),
+                                        "Wert": r.get("value")
                                     })
 
                             elem.clear()
@@ -74,46 +83,37 @@ if uploaded_file is not None:
 
                     progress_bar.progress(1.0)
 
-                    @st.cache_data
-                    def process_records(records_list):
-                        df_local = pd.DataFrame(records_list)
-                        df_local["Datum"] = pd.to_datetime(
-                            df_local["Datum"], errors="coerce", utc=True
-                        )
-                        df_local["Wert"] = pd.to_numeric(df_local["Wert"], errors="coerce")
-                        return df_local.dropna(subset=["Datum", "Wert"])
+                    # --- DataFrame-Erstellung ---
+                    if not records:
+                        st.warning("Keine passenden Daten gefunden. Ändere Filter oder Zeitraum.")
+                    else:
+                        df = pd.DataFrame(records)
+                        df["Wert"] = pd.to_numeric(df["Wert"], errors="coerce")
+                        df = df.dropna(subset=["Wert"])
+                        st.success(f"{len(df)} Datensätze verarbeitet.")
 
-                    df = process_records(records)
-                    st.success(f"{len(df)} Datensätze verarbeitet.")
+                        # --- Rohdatenanzeige ---
+                        with st.expander("📋 Rohdaten anzeigen"):
+                            st.dataframe(df)
 
-                    # --- BMI & Datenzeitraum berechnen ---
-                    height_df = df[df["Typ"] == "HKQuantityTypeIdentifierHeight"].copy()
-                    weight_df = df[df["Typ"] == "HKQuantityTypeIdentifierBodyMass"].copy()
-
-                    if (not height_df.empty) and (not weight_df.empty):
-                        latest_height = height_df.sort_values("Datum").iloc[-1]["Wert"] / 100.0
-                        latest_weight = weight_df.sort_values("Datum").iloc[-1]["Wert"]
-                        try:
+                        # --- BMI-Berechnung ---
+                        height_df = df[df["Typ"] == "HKQuantityTypeIdentifierHeight"]
+                        weight_df = df[df["Typ"] == "HKQuantityTypeIdentifierBodyMass"]
+                        if not height_df.empty and not weight_df.empty:
+                            latest_height = height_df.sort_values("Datum").iloc[-1]["Wert"] / 100
+                            latest_weight = weight_df.sort_values("Datum").iloc[-1]["Wert"]
                             bmi = latest_weight / (latest_height ** 2)
-                        except Exception:
-                            bmi = None
+                            st.metric("BMI", f"{bmi:.1f}")
 
-                        data_start = df["Datum"].min()
-                        if pd.notna(data_start):
-                            data_years = datetime.now(timezone.utc).year - data_start.year
-                        else:
-                            data_years = "n/a"
+                        # --- Durchschnittswerte ---
+                        avg_vals = df.groupby("Typ")["Wert"].mean().round(2)
+                        st.subheader("Durchschnittswerte im Zeitraum")
+                        st.dataframe(avg_vals)
 
-                        if bmi is not None:
-                            st.metric("Aktueller BMI", f"{bmi:.1f}")
-                        st.metric("Datenzeitraum (Jahre)", f"{data_years}")
-
-                    # --- Letzte 30 Tage: Schritte & Herzfrequenz ---
-                    df_recent = df[df["Datum"] >= thirty_days_ago]
-                    if not df_recent.empty:
-                        df_daily = df_recent.groupby(["Datum", "Typ"])["Wert"].mean().unstack()
-                        st.subheader("Letzte 30 Tage: Aktivität und Herzfrequenz")
-                        st.line_chart(df_daily)
+                        # --- Zeitverlauf ---
+                        st.subheader("📈 Verlauf über Zeit")
+                        df_chart = df.groupby(["Datum", "Typ"])["Wert"].mean().unstack()
+                        st.line_chart(df_chart)
 
     except zipfile.BadZipFile:
         st.error("Die hochgeladene Datei ist kein gültiges ZIP-Archiv.")
