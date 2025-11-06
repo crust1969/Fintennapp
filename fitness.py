@@ -34,7 +34,12 @@ if uploaded_file is not None:
             xml_name = [f for f in z.namelist() if f.endswith("export.xml")]
             if not xml_name:
                 st.error("❌ Keine export.xml in der ZIP gefunden.")
-            else:
+    else:
+        # Nehme die erste gefundene XML-Datei
+        with z.open(xml_files[0]) as xml_file:
+            st.success(f"📦 Gefundene XML-Datei: {xml_files[0]}")
+            tree = ET.parse(xml_file)
+            root = tree.getroot()
                 with z.open(xml_name[0]) as xml_file:
                     st.success("📦 Export-Datei erfolgreich geladen!")
                     # XML in DataFrame umwandeln
